@@ -189,7 +189,7 @@ class SHADE(BaseEstimator, ClusterMixin):
             trainloader = get_dataloader(
                 Z,
                 self.batch_size,
-                drop_last=True,
+                drop_last=False,
                 shuffle=True,
             )
             testloader = get_dataloader(
@@ -432,7 +432,7 @@ class _SHADE_Module(_AbstractAutoencoder):
             self.matrix_dc_distance = self.dc_tree.dc_distances()
 
         self.train()
-        for epoch_i in tqdm(range(self.n_epochs), file=sys.stdout, desc="Epoch", disable=True):
+        for epoch_i in tqdm(range(self.n_epochs), file=sys.stdout, desc="Epoch", disable=False):
             loss_rec_sum = []
             loss_dens_sum = []
             # Update Network

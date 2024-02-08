@@ -126,9 +126,7 @@ class DCTree:
 
     References
     ----------
-    Anna Beer, Andrew Draganov, Ellen Hohma, Philipp Jahn, Christian M.M. Frey, and Ira Assent.
-    "Connecting the Dots -- Density-Connectivity Distance unifies DBSCAN, k-Center and Spectral
-    Clustering." KDD '23. 2023.
+    ***
     """
 
     n: int  # len(points)

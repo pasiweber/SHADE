@@ -1,4 +1,12 @@
-# License: BSD 3 clause
+# Implementation of the dc-distance with a DCTree by
+# - Author: us
+# - Source: this repo
+# - License: -
+
+# Paper: Connecting the Dots -- Density-Connectivity Distance unifies DBSCAN, k-Center and Spectral Clustering
+# Authors: Anna Beer, Andrew Draganov, Ellen Hohma, Philipp Jahn, Christian M.M. Frey, and Ira Assent
+# Link: https://doi.org/10.1145/3580305.3599283
+
 
 from __future__ import annotations
 
@@ -126,7 +134,9 @@ class DCTree:
 
     References
     ----------
-    ***
+    Anna Beer, Andrew Draganov, Ellen Hohma, Philipp Jahn, Christian M.M. Frey, and Ira Assent.
+    "Connecting the Dots -- Density-Connectivity Distance unifies DBSCAN, k-Center and Spectral
+    Clustering." KDD '23. 2023.
     """
 
     n: int  # len(points)
@@ -138,8 +148,6 @@ class DCTree:
     f_occur: List[int]
     level_table: _SparseTable
 
-    mst_edges: np.ndarray
-
     access_method: str
     no_fastindex: bool
     n_jobs: int
@@ -149,15 +157,20 @@ class DCTree:
         self,
         points: np.ndarray,
         min_points: int = 5,
+        min_points_mr: Optional[int] = None,
         access_method: str = "tree",
-        no_fastindex: bool = False,
+        no_fastindex: bool = True,
         use_less_memory: bool = False,
         n_jobs: Optional[int] = None,
+        precomputed=False,
     ):
         self.n = points.shape[0]
         self.min_points = min_points
         self.access_method = access_method
         self.no_fastindex = no_fastindex
+
+        if min_points_mr is None:
+            min_points_mr = min_points
 
         if n_jobs is None or n_jobs == 0:
             self.n_jobs = cpu_count()
@@ -167,17 +180,22 @@ class DCTree:
             self.n_jobs = n_jobs
         self.no_gil = sys.flags.nogil if hasattr(sys.flags, "nogil") else False
 
-        if use_less_memory:
-            self.mst_edges, core_dists = self._get_mst_edges(points, use_less_memory=True)
+        if use_less_memory and not precomputed:
+            mst_edges = self._get_mst_edges(points, use_less_memory=True)
         else:
-            reach_dists, core_dists = calculate_reachability_distance(points, min_points)
-            self.mst_edges, _ = self._get_mst_edges(reach_dists)
-            del reach_dists
-        self.mst_edges.sort(order="dist")
-        self.root = self._build_tree(self.mst_edges, core_dists)
-        del core_dists
+            if not precomputed:
+                reach_dists = calculate_reachability_distance(points, min_points_mr)
+            else:
+                reach_dists = points
+            mst_edges = self._get_mst_edges(reach_dists)
+            if not precomputed:
+                del reach_dists
+        mst_edges.sort(order="dist")
+        self.root = self._build_tree(mst_edges)
+        del mst_edges
 
-        self._init_fast_index()
+        if not self.no_fastindex:
+            self._init_fast_index()
 
     def _init_fast_index(self):
         n_nodes = 2 * self.n - 1
@@ -185,8 +203,7 @@ class DCTree:
         self.level = [0] * (2 * n_nodes - 1)
         self.f_occur = [-1] * n_nodes
         self._euler_tour(self.root)
-        if not self.no_fastindex:
-            self.level_table = _SparseTable(self.level)
+        self.level_table = _SparseTable(self.level)
 
     def __getitem__(
         self,
@@ -199,7 +216,7 @@ class DCTree:
                 Tuple[np.ndarray, Sequence[int], np.ndarray, Sequence[int]],
             ],
         ],
-    ) -> Union[Union[_DCNode, List[_DCNode]], Union[np.float64, np.ndarray]]:
+    ) -> Union[Union[_DCNode, List[_DCNode]], Union[float, np.ndarray]]:
         """
         Returns the _DCNode of given index if `arg` is an integer or a Sequence.
 
@@ -249,36 +266,38 @@ class DCTree:
         if self.root is None:
             return ""
 
-        pointer_right = "└──"
-        pointer_left = "├──" if self.root.right else "└──"
+        # pointer_right = "└──"
+        # pointer_left = "├──" if self.root.right else "└──"
+        pointer_right = "   "
+        pointer_left = "   " if self.root.right else "   "
         return (
             f"{self.root}"
             f"{self.__repr__help(self.root.left, pointer_left, '', self.root.right is not None)}"
             f"{self.__repr__help(self.root.right, pointer_right, '', False)}"
         )
 
-    def __repr__help(
-        self, node: Optional[_DCNode], pointer: str, padding: str, has_right_sibling: bool
-    ):
+    def __repr__help(self, node: Optional[_DCNode], pointer: str, padding: str, has_right_sibling: bool):
         if node is None:
             return ""
 
-        padding_for_both = padding + ("|  " if has_right_sibling else "   ")
-        pointer_right = "└──"
-        pointer_left = "├──" if node.right else "└──"
+        # padding_for_both = padding + ("|  " if has_right_sibling else "   ")
+        # pointer_right = "└──"
+        # pointer_left = "├──" if node.right else "└──"
+        padding_for_both = padding + ("   " if has_right_sibling else "   ")
+        pointer_right = "   "
+        pointer_left = "   " if node.right else "   "
         return (
+            f"\n   {padding.replace('|', ' ')}// #region"
             f"\n{padding}{pointer}{node}"
             f"{self.__repr__help(node.left, pointer_left, padding_for_both, node.right is not None)}"
             f"{self.__repr__help(node.right, pointer_right, padding_for_both, False)}"
+            f"\n   {padding.replace('|', ' ')}// #endregion"
         )
 
-    def __len__(self):
-        return self.n
-
-    def dc_dist(self, i: int, j: int) -> np.float64:
+    def dc_dist(self, i: int, j: int) -> float:
         """Returns the dc_distance from points[i] to points[j] in O(1) time."""
         if i == j:
-            return np.float64(0)
+            return 0
         return self._lca(i, j).dist
 
     def _lca(self, i: int, j: int) -> _DCNode:
@@ -316,12 +335,16 @@ class DCTree:
         if Y is None:
             Y = X
 
-        dc_dists = np.zeros((len(X), len(Y)))
-
         if access_method is None:
             access_method = self.access_method
 
-        if access_method == "dc_dist":
+        if access_method == "dc_dist" and self.no_fastindex:
+            print("No fastindex computed. Fallback to access_method: `tree`.")
+            access_method = "tree"
+
+        if access_method == "dc_dist" and not self.no_fastindex:
+            dc_dists = np.zeros((len(X), len(Y)))
+
             for i in range(len(X)):
                 for j in range(i + 1 if X is Y else 0, len(Y)):
                     if X[i] != Y[j]:
@@ -331,6 +354,8 @@ class DCTree:
             return dc_dists
 
         elif access_method == "tree":
+            dc_dists = np.zeros((len(X), len(Y)))
+
             idx_rev_X = np.full(self.n, -1)
             idx_rev_X[X] = range(len(X))
 
@@ -340,8 +365,9 @@ class DCTree:
                 idx_rev_Y = np.full(self.n, -1)
                 idx_rev_Y[Y] = range(len(Y))
 
-            inodes_start = self.n
-            inodes_end = 2 * self.n - 1
+            inodes = self.get_internal_nodes()
+            inodes_start = 0
+            inodes_end = len(inodes)
 
             n_jobs = self.n_jobs if self.no_gil else 4
             pool = ThreadPool(n_jobs)
@@ -351,7 +377,7 @@ class DCTree:
 
             def func(start):
                 for i in range(start, min(start + chunk_size, inodes_end)):
-                    inode = self.euler[self.f_occur[i]]
+                    inode = inodes[i]
                     # inode always has left and right node
                     i_leaves = inode.left.leaves
                     j_leaves = inode.right.leaves
@@ -372,9 +398,7 @@ class DCTree:
 
         raise ValueError(f"'{access_method}' is no valid `access_method`")
 
-    def _get_mst_edges(
-        self, dist_matrix: np.ndarray, use_less_memory: bool = False
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    def _get_mst_edges(self, dist_matrix: np.ndarray, use_less_memory: bool = False) -> np.ndarray:
         """Prim's algorithm to build up the minimum spanning tree in O(n^2) time."""
         # dist_matrix are the points, if use_less_memory=True
         n = self.n
@@ -386,20 +410,17 @@ class DCTree:
         not_in_mst[u] = False
         mst_edges = np.empty((n - 1), dtype=([("i", int), ("j", int), ("dist", float)]))
 
-        core_dists = np.zeros((dist_matrix.shape[0]))
         if use_less_memory:
+            reach_dists = np.empty((dist_matrix.shape[0]))
             for i in range(dist_matrix.shape[0]):
                 eucl_dists = np.linalg.norm(dist_matrix - dist_matrix[i], axis=1)
-                core_dists[i] = np.partition(eucl_dists, self.min_points - 1)[self.min_points - 1]
+                reach_dists[i] = np.max(np.partition(eucl_dists, self.min_points)[: self.min_points])
 
         for i in range(n - 1):
             if use_less_memory:
-                # Euclidean distances
-                dist_u = np.linalg.norm(dist_matrix - dist_matrix[u], axis=1)
-                # reachability distance of i
-                dist_u = np.maximum(dist_u, core_dists[u])
-                # reachability distance of all points
-                dist_u = np.maximum(dist_u, core_dists)
+                dist_u = np.linalg.norm(dist_matrix - dist_matrix[u], axis=1)  # Euclidean distances
+                dist_u = np.maximum(dist_u, reach_dists[u])  # reachability distance of i
+                dist_u = np.maximum(dist_u, reach_dists)  # reachability distance of all points
 
                 v = np.where(not_in_mst & (dist_u < nodes_min_dist))[0]
                 nodes_min_dist[v] = dist_u[v]
@@ -413,34 +434,38 @@ class DCTree:
             mst_edges[i] = (parent[u], u, nodes_min_dist[u])
             not_in_mst[u] = False
 
-        return mst_edges, core_dists
+        return mst_edges
 
-    def _build_tree(self, mst_edges: np.ndarray, core_dists: np.ndarray) -> _DCNode:
+    def _build_tree(self, mst_edges: np.ndarray) -> _DCNode:
         """Kruskal's algorithm to build up the DCTree with the precomputed
         and sorted mst_edges in O(n) time."""
-        union_find = _UnionFind(self.n, core_dists)
-        node = _DCNode(id=0, dist=np.float64(0), leaves=[0])
+        union_find = _UnionFind(self.n)
+        node = _DCNode(id=0, dist=0.0, leaves=[0])
         idx = self.n
+        k = len(mst_edges)
         for i, j, dist in mst_edges:
             i_root = union_find.find(i)
             j_root = union_find.find(j)
             node = _DCNode(
                 id=idx,
                 dist=dist,
+                k=-1 if (len(i_root.leaves) + len(j_root.leaves)) < self.min_points else k,
                 left=i_root,
                 right=j_root,
                 leaves=i_root.leaves + j_root.leaves,
             )
+            i_root.parent = node
+            j_root.parent = node
             union_find.union(i, j, node)
             idx += 1
+            if not node.k == -1:
+                k -= 1
         return node
 
     def _euler_tour(self, root: _DCNode):
         """Euler tour to get the euler, level, and f_occur lists in O(n) time."""
         DOWN, UP = 0, 1
-        stack: deque[Tuple[_DCNode, int, Literal[0, 1]]] = deque(
-            [(root, 0, DOWN)]
-        )  # (node, level, DOWN / UP)
+        stack: deque[Tuple[_DCNode, int, Literal[0, 1]]] = deque([(root, 0, DOWN)])  # (node, level, DOWN / UP)
 
         pos = 0
         while len(stack):
@@ -466,146 +491,76 @@ class DCTree:
                 self.level[pos] = level
                 pos += 1
 
+    def get_internal_nodes(self):
+        nodes = []
+        stack: deque[_DCNode] = deque([self.root])
 
-class _DCNode:
-    id: int
-    dist: np.float64
-    leaves: List[int]
-    left: Optional[_DCNode]
-    right: Optional[_DCNode]
+        while len(stack):
+            node = stack.pop()
 
-    def __init__(
-        self,
-        id: int,
-        dist: np.float64,
-        leaves: List[int],
-        left: Optional[_DCNode] = None,
-        right: Optional[_DCNode] = None,
-    ):
-        self.id = id
-        self.dist = dist
-        self.leaves = leaves
-        self.left = left
-        self.right = right
+            if node and node.left and node.right:
+                nodes.append(node)
 
-    def __repr__(self):
-        return f"DCNode #{self.id} ({self.dist :.4f}) - {len(self.leaves)}"
+            if node.left:
+                stack.append(node.left)
 
+            if node.right:
+                stack.append(node.right)
+        return nodes
 
-class _UnionFind:
-    """
-    UnionFind structure which provides the functions `find` and `union` with amortized
-    time complexity of O(α(n)), where α(n) is the inverse Ackermann function.
-    """
+    def traverse_until_k(self, k):
+        from queue import PriorityQueue
 
-    root: List[_DCNode]
-    parent: List[int]
-    rank: List[int]
+        result_nodes = set([self.root])
+        if k == 1:
+            return result_nodes
 
-    def __init__(self, n: int, core_dists: np.ndarray):
-        self.root = [_DCNode(id=i, dist=core_dists[i], leaves=[i]) for i in range(n)]
-        self.parent = list(range(n))
-        self.rank = [1] * n
+        stack = PriorityQueue()
+        stack.put((-self.root.dist, self.root, self.root))
+        while not stack.empty():
+            _, node, parent_node = stack.get()
 
-    def find(self, x: int) -> _DCNode:
-        """Finds the representative node of x."""
-        return self.root[self._find(x)]
+            if node is None:
+                return
 
-    def _find(self, x: int) -> int:
-        """Finds the representative of x."""
-        parent = self.parent[x]
-        if parent != x:
-            parent = self._find(parent)
-            self.parent[x] = parent
-        return parent
+            if node.k >= 0:
+                if node.left.k != -1:
+                    if node.left.k != -1 and node.right.k != -1:
+                        result_nodes.discard(parent_node)
+                        result_nodes.discard(node)
+                        result_nodes.add(node.left)
+                    if node.parent.left.k == -1 or node.parent.right.k == -1:
+                        stack.put((-node.left.dist, node.left, parent_node))
+                    else:
+                        stack.put((-node.left.dist, node.left, node))
+                if node.right.k != -1:
+                    if node.left.k != -1 and node.right.k != -1:
+                        result_nodes.discard(parent_node)
+                        result_nodes.discard(node)
+                        result_nodes.add(node.right)
+                    if node.parent.left.k == -1 or node.parent.right.k == -1:
+                        stack.put((-node.right.dist, node.right, parent_node))
+                    else:
+                        stack.put((-node.right.dist, node.right, node))
 
-    def union(self, x: int, y: int, node: _DCNode):
-        """Union the set which contains x with the set which contains y."""
-        xset = self._find(x)
-        yset = self._find(y)
-        if xset == yset:
-            return
+            if len(result_nodes) >= k:
+                break
 
-        # Put smaller ranked item under bigger ranked item if ranks are different
-        if self.rank[xset] < self.rank[yset]:
-            self.parent[xset] = yset
-            self.root[yset] = node
-        elif self.rank[xset] > self.rank[yset]:
-            self.parent[yset] = xset
-            self.root[xset] = node
+        return result_nodes
 
-        # If ranks are same, then move y under x (doesn't matter which one goes where)
-        # and increment rank of x's tree
-        else:
-            self.parent[yset] = xset
-            self.root[xset] = node
-            self.rank[xset] = self.rank[xset] + 1
+    def get_k_center(self, k):
+        nodes = self.traverse_until_k(k)
+        labels = np.full(self.n, -1)
+        for i, node in enumerate(nodes):
+            labels[np.array(node.leaves)] = i
+        return labels
 
-
-class _SparseTable:
-    """
-    SparseTable structure which provides the function `query` which finds the index of the
-    minimum value within the range [l,r] in the array `arr`.
-    Needs O(n * logn) time and storage to precompute and O(1) for the query.
-    """
-
-    arr: List[int]
-    sparse_table: List[List[int]]
-    pow_2: List[int]
-    log_2: List[int]
-
-    def __init__(self, arr: List[int]):
-        self.arr = arr
-        n = len(arr)
-        log_n = n.bit_length() - 1
-        self.sparse_table = [[-1] * log_n for _ in range(n - 1)]
-        self.pow_2 = [1 << i for i in range(log_n + 1)]
-        self.log_2 = [i.bit_length() - 1 for i in range(n)]
-
-        for i in range(0, n - 1):
-            self.sparse_table[i][0] = i if self.arr[i] < self.arr[i + 1] else i + 1
-
-        for j in range(1, log_n):
-            for i in range(n - self.pow_2[j + 1] + 1):
-                L = self.sparse_table[i][j - 1]
-                R = self.sparse_table[i + self.pow_2[j]][j - 1]
-                self.sparse_table[i][j] = L if arr[L] <= arr[R] else R
-
-    def query(self, l: int, r: int) -> int:
-        # assert L > R, f"L value ({L}) needs to be larger than R value ({R})"
-        if l == r:
-            return l
-        k = self.log_2[r - l + 1]
-        l_k = self.sparse_table[l][k - 1]
-        r_k = self.sparse_table[r - self.pow_2[k] + 1][k - 1]
-        return l_k if self.arr[l_k] <= self.arr[r_k] else r_k
-
-
-def calculate_reachability_distance(
-    points: np.ndarray, min_points: int = 5, n_jobs: Optional[int] = None
-) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Calculates the reachability distance of points using the min_points threshold in O(n^2) time.
-
-    Raises a ValueError if min_points is larger than the number of points.
-    """
-
-    if min_points > points.shape[0]:
-        raise ValueError(
-            f"Min points ({min_points}) can't exceed the size of the dataset ({points.shape[0]})"
-        )
-
-    reach_dists = pairwise_distances(points, metric="euclidean", n_jobs=n_jobs)
-
-    core_dists = np.zeros((points.shape[0]))
-    if min_points > 1:
-        # Get reachability for each point with respect to min_points parameter
-        for i in range(points.shape[0]):
-            core_dists[i] = np.max(np.partition(reach_dists[i], min_points)[:min_points])
-        np.maximum(reach_dists, core_dists[np.newaxis, :], reach_dists)
-        np.maximum(reach_dists, core_dists[:, np.newaxis], reach_dists)
-        np.fill_diagonal(reach_dists, 0)
-    return reach_dists, core_dists
+    def get_eps_for_k(self, k, eps=-3e-12):
+        nodes = self.traverse_until_k(k)
+        min_eps = np.inf
+        for node in nodes:
+            min_eps = min(min_eps, node.parent.dist)
+        return min_eps + eps
 
 
 def _serialize(root: _DCNode):
@@ -648,7 +603,7 @@ def save(dc_tree: DCTree, file_path: str) -> None:
 
 def _deserialize(data: List[str]) -> _DCNode:
     id, dist = data[0].split("|")
-    root = _DCNode(id=int(id[1:]), dist=np.float64(dist), leaves=[])
+    root = _DCNode(id=int(id[1:]), dist=float(dist), leaves=[])
 
     DOWN, UP = 0, 1
     stack: deque[Literal[0, 1]] = deque([UP, DOWN, DOWN])
@@ -666,9 +621,9 @@ def _deserialize(data: List[str]) -> _DCNode:
                 continue
             id, dist = data[pos].split("|")
             if id[0] != "'":
-                res.append(_DCNode(id=int(id), dist=np.float64(dist), leaves=[int(id)]))
+                res.append(_DCNode(id=int(id), dist=0, leaves=[int(id)]))
                 continue
-            inode = _DCNode(id=int(id[1:]), dist=np.float64(dist), leaves=[])
+            inode = _DCNode(id=int(id[1:]), dist=float(dist), leaves=[])
             nodes.append(inode)
             stack.extend([UP, DOWN, DOWN])
 
@@ -731,3 +686,168 @@ def load(
     byte_data = file.read()
     file.close()
     return deserialize_compressed(byte_data, access_method, no_fastindex, n_jobs=n_jobs)
+
+
+def calculate_reachability_distance(
+    points: np.ndarray, min_points: int = 5, n_jobs: Optional[int] = None
+) -> np.ndarray:
+    """
+    Calculates the reachability distance of points using the min_points threshold in O(n^2) time.
+
+    Raises a ValueError if min_points is larger than the number of points.
+    """
+
+    if min_points > points.shape[0]:
+        raise ValueError(f"Min points ({min_points}) can't exceed the size of the dataset ({points.shape[0]})")
+
+    eucl_dists = pairwise_distances(points, metric="euclidean", n_jobs=n_jobs)
+
+    if min_points > 1:
+        # Get reachability for each point with respect to min_points parameter
+        reach_dists = np.empty((points.shape[0]))
+        for i in range(points.shape[0]):
+            reach_dists[i] = np.max(np.partition(eucl_dists[i], min_points)[:min_points])
+        np.maximum(eucl_dists, reach_dists[np.newaxis, :], eucl_dists)
+        np.maximum(eucl_dists, reach_dists[:, np.newaxis], eucl_dists)
+        np.fill_diagonal(eucl_dists, 0)
+    return eucl_dists
+
+
+class _DCNode:
+    id: int
+    dist: float
+    leaves: List[int]
+    left: Optional[_DCNode]
+    right: Optional[_DCNode]
+    parent: _DCNode
+    k: int
+
+    def __init__(
+        self,
+        id: int,
+        dist: float,
+        leaves: List[int],
+        left: Optional[_DCNode] = None,
+        right: Optional[_DCNode] = None,
+        parent=None,
+        k=-1,
+    ):
+        self.id = id
+        self.dist = dist
+        self.leaves = leaves
+        self.left = left
+        self.right = right
+        if not parent:
+            self.parent = self
+        else:
+            self.parent = parent
+        self.k = k
+
+    def __repr__(self):
+        return f"DCNode #{self.id} ({self.dist}) - {self.k}"
+
+    def __lt__(self, other):
+        return self.dist < other.dist
+
+
+class _UnionFind:
+    """
+    UnionFind structure which provides the functions `find` and `union` with amortized
+    time complexity of O(α(n)), where α(n) is the inverse Ackermann function.
+    """
+
+    root: List[_DCNode]
+    parent: List[int]
+    rank: List[int]
+
+    def __init__(self, n: int):
+        self.root = [_DCNode(id=i, dist=0, leaves=[i]) for i in range(n)]
+        self.parent = list(range(n))
+        self.rank = [1] * n
+
+    def find(self, x: int) -> _DCNode:
+        """Finds the representative node of x."""
+        return self.root[self._find(x)]
+
+    def _find(self, x: int) -> int:
+        """Finds the representative of x."""
+        parent = self.parent[x]
+        if parent != x:
+            parent = self._find(parent)
+            self.parent[x] = parent
+        return parent
+
+    def union(self, x: int, y: int, node: _DCNode):
+        """Union the set which contains x with the set which contains y."""
+        xset = self._find(x)
+        yset = self._find(y)
+        if xset == yset:
+            return
+
+        # Put smaller ranked item under bigger ranked item if ranks are different
+        if self.rank[xset] < self.rank[yset]:
+            self.parent[xset] = yset
+            self.root[yset] = node
+        elif self.rank[xset] > self.rank[yset]:
+            self.parent[yset] = xset
+            self.root[xset] = node
+
+        # If ranks are same, then move y under x (doesn't matter which one goes where)
+        # and increment rank of x's tree
+        else:
+            self.parent[yset] = xset
+            self.root[xset] = node
+            self.rank[xset] = self.rank[xset] + 1
+
+
+class _SparseTable:
+    """
+    SparseTable structure which provides the function `query` which finds the index of the
+    minimum value within the range [l,r] in the array `arr`.
+    Needs O(n * logn) time and storage to precompute and O(1) for the query.
+    """
+
+    # arr: List[int]
+    arr: np.ndarray
+    # sparse_table: List[List[int]]
+    sparse_table: np.ndarray
+    pow_2: List[int]
+    log_2: List[int]
+
+    def __init__(self, arr: List[int]):
+        self.arr = np.asarray(arr, dtype=np.int64)
+        n = len(arr)
+        log_n = n.bit_length() - 1
+        # self.sparse_table = [[-1] * log_n for _ in range(n - 1)]
+        self.sparse_table = np.full((n, log_n), -1, dtype=np.int64)
+
+        self.pow_2 = [1 << i for i in range(log_n + 1)]
+        self.log_2 = [i.bit_length() - 1 for i in range(n)]
+
+        # for i in range(0, n - 1):
+        #     self.sparse_table[i][0] = i if self.arr[i] < self.arr[i + 1] else i + 1
+        idx = np.arange(n - 1, dtype=np.int64)
+        self.sparse_table[: n - 1, 0] = np.where(self.arr[idx] < self.arr[idx + 1], idx, idx + 1)
+
+        for j in range(1, log_n):
+            step = self.pow_2[j]  # 2**j
+            limit = n - self.pow_2[j + 1] + 1  # number of start positions
+            left_idx = self.sparse_table[:limit, j - 1]  # L for i = 0..limit‑1
+            right_idx = self.sparse_table[step : step + limit, j - 1]  # R for i = 0..limit‑1
+            choose_left = self.arr[left_idx] <= self.arr[right_idx]
+
+            self.sparse_table[:limit, j] = np.where(choose_left, left_idx, right_idx)
+
+            # for i in range(n - self.pow_2[j + 1] + 1):
+            #     L = self.sparse_table[i][j - 1]
+            #     R = self.sparse_table[i + step][j - 1]
+            #     self.sparse_table[i][j] = L if arr[L] <= arr[R] else R
+
+    def query(self, l: int, r: int) -> int:
+        # assert L > R, f"L value ({L}) needs to be larger than R value ({R})"
+        if l == r:
+            return l
+        k = self.log_2[r - l + 1]
+        l_k = self.sparse_table[l][k - 1]
+        r_k = self.sparse_table[r - self.pow_2[k] + 1][k - 1]
+        return l_k if self.arr[l_k] <= self.arr[r_k] else r_k

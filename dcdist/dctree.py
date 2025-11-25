@@ -159,7 +159,7 @@ class DCTree:
         min_points: int = 5,
         min_points_mr: Optional[int] = None,
         access_method: str = "tree",
-        no_fastindex: bool = True,
+        no_fastindex: bool = False,
         use_less_memory: bool = False,
         n_jobs: Optional[int] = None,
         precomputed=False,

@@ -7,10 +7,10 @@ import torch
 import sys
 
 from dcdist import DCTree, DCTree_Clusterer
-from clustpy.deep.autoencoders._abstract_autoencoder import _AbstractAutoencoder
-from clustpy.deep.autoencoders import FeedforwardAutoencoder
+from clustpy.deep.neural_networks._abstract_autoencoder import _AbstractAutoencoder
+from clustpy.deep.neural_networks import FeedforwardAutoencoder
 from clustpy.deep._data_utils import get_dataloader
-from clustpy.deep._train_utils import get_trained_autoencoder
+from clustpy.deep._train_utils import get_trained_network
 from clustpy.deep._utils import (
     detect_device,
     set_torch_seed,
@@ -32,19 +32,17 @@ sys.setrecursionlimit(1000000000)
 
 class SHADE(BaseEstimator, ClusterMixin):
     """
-    An autoencoder (AE) will be trained with the reconstruction loss and the d_dc loss function.
+    A neural network (autoencoder AE) will be trained with the reconstruction loss and the d_dc loss function.
     Afterward, KMeans or HDBSCAN identifies the initial clusters.
 
     Parameters
     ----------
     batch_size : int
-        Size of the data batches. (default: 256)
-    n_epochs : int
-        Number of n_epochs. (default: 50)
+        Size of the data batches. (default: 500)
     embedding_size : int
-        Size of the embedding within the autoencoder. (default: 10)
-    autoencoder : torch.nn.Module
-        The input autoencoder. If None a new Autoencoder will be created. (default: None)
+        Size of the embedding within the neural_network. (default: 10)
+    neural_network : torch.nn.Module
+        The input neural_network. If None a new Autoencoder model will be created. (default: None)
     optimizer_params : dict
         Parameters of the optimizer for the clustering procedure.
         Can also include the learning rate. (default: {"lr": 1e-3})
@@ -65,9 +63,9 @@ class SHADE(BaseEstimator, ClusterMixin):
     Attributes
     ----------
     labels_ : np.ndarray
-        The final labels (obtained by a final KMeans execution)
-    autoencoder : torch.nn.Module
-        The final autoencoder
+        The final labels
+    neural_network : torch.nn.Module
+        The final neural_network
 
     Examples
     --------
@@ -82,7 +80,7 @@ class SHADE(BaseEstimator, ClusterMixin):
     """
 
     batch_size: int
-    autoencoder: Optional[torch.nn.Module]
+    neural_network: Optional[torch.nn.Module]
     min_points: int
     use_complete_dc_tree: bool
     use_matrix_dc_distance: bool
@@ -96,8 +94,6 @@ class SHADE(BaseEstimator, ClusterMixin):
     optimizer_class: torch.optim.Optimizer
     loss_fn: torch.nn.modules.loss._Loss
     custom_dataloaders = Optional[Tuple[Callable, Callable]]
-    standardize: bool
-    standardize_axis: int
     random_state: np.random.RandomState
     device: torch.device
     cluster_algorithm: ClusterMixin
@@ -111,9 +107,9 @@ class SHADE(BaseEstimator, ClusterMixin):
     def __init__(
         self,
         batch_size: int = 500,
-        autoencoder: Optional[torch.nn.Module] = None,
+        neural_network: Optional[torch.nn.Module] = None,
         min_points: int = 5,
-        use_complete_dc_tree: bool = False,
+        use_complete_dc_tree: bool = True,
         use_matrix_dc_distance: bool = True,
         increase_inter_cluster_distance: bool = False,
         pretrain_epochs: int = 0,
@@ -124,8 +120,6 @@ class SHADE(BaseEstimator, ClusterMixin):
         optimizer_class: torch.optim.Optimizer = torch.optim.Adam,
         loss_fn: torch.nn.modules.loss._Loss = torch.nn.MSELoss(),
         custom_dataloaders: Optional[Tuple[Callable, Callable]] = None,
-        standardize: bool = True,
-        standardize_axis: int = 0,
         random_state: Optional[np.random.RandomState] = None,
         device: Optional[torch.device] = None,
         n_clusters: Optional[int] = None,
@@ -145,12 +139,10 @@ class SHADE(BaseEstimator, ClusterMixin):
         self.clustering_epochs = clustering_epochs
         self.clustering_optimizer_params = clustering_optimizer_params
         self.embedding_size = embedding_size
-        self.autoencoder = autoencoder
+        self.neural_network = neural_network
         self.optimizer_class = optimizer_class
         self.loss_fn = loss_fn
         self.custom_dataloaders = custom_dataloaders
-        self.standardize = standardize
-        self.standardize_axis = standardize_axis
         self.random_state = check_random_state(random_state)
         set_torch_seed(self.random_state)
         self.device = detect_device(device)
@@ -182,18 +174,14 @@ class SHADE(BaseEstimator, ClusterMixin):
 
         # Create Dataloader
         if self.custom_dataloaders is None:
-            if self.standardize:
-                Z = _standardize(X, self.standardize_axis)
-            else:
-                Z = X
             trainloader = get_dataloader(
-                Z,
+                X,
                 self.batch_size,
                 drop_last=False,
                 shuffle=True,
             )
             testloader = get_dataloader(
-                Z,
+                X,
                 self.batch_size,
                 drop_last=False,
                 shuffle=False,
@@ -209,27 +197,30 @@ class SHADE(BaseEstimator, ClusterMixin):
             self.dc_tree = DCTree(X, min_points=self.min_points)
 
         # Create and pretrain Autoencoder
-        if self.autoencoder is None:
+        if self.neural_network is None:
             architecture = [X.shape[1], 512, 256, 128, self.embedding_size]
-            self.autoencoder = FeedforwardAutoencoder(architecture)
-            self.autoencoder = self.autoencoder.to(self.device)
+            self.neural_network = FeedforwardAutoencoder(architecture)
+            self.neural_network = self.neural_network.to(self.device)
 
-        if not self.autoencoder.fitted:
-            self.autoencoder = get_trained_autoencoder(
-                trainloader,
-                self.pretrain_optimizer_params,
-                self.pretrain_epochs,
-                self.device,
-                self.optimizer_class,
-                self.loss_fn,
-                self.embedding_size,
-                self.autoencoder,
+        if not self.neural_network.fitted:
+            self.neural_network = get_trained_network(
+                trainloader=trainloader,
+                data=X,
+                n_epochs=self.pretrain_epochs,
+                batch_size=self.batch_size,
+                optimizer_params=self.pretrain_optimizer_params,
+                optimizer_class=self.optimizer_class,
+                device=self.device,
+                ssl_loss_fn=self.loss_fn,
+                embedding_size=self.embedding_size,
+                neural_network=self.neural_network,
+                random_state=self.random_state,
             )
-            self.autoencoder.fitted = False
+            self.neural_network.fitted = False
 
         # Setup SHADE Module
-        self.ddc_module = _SHADE_Module(
-            autoencoder=self.autoencoder,
+        self.shade_module = _SHADE_Module(
+            autoencoder=self.neural_network,
             n_epochs=self.clustering_epochs,
             min_points=self.min_points,
             dc_tree=self.dc_tree,
@@ -241,17 +232,17 @@ class SHADE(BaseEstimator, ClusterMixin):
             optimizer_params=self.clustering_optimizer_params,
             device=self.device,
         )
-        if not self.autoencoder.fitted:
+        if not self.neural_network.fitted:
             print("Start training with clustering loss.")
-            self.ddc_module.fit(
+            self.shade_module.fit(
                 X,
                 trainloader=trainloader,
                 loss_fn=self.loss_fn,
                 testloader=testloader,
             )
-            self.autoencoder.fitted = True
+            self.neural_network.fitted = True
 
-        embedding = encode_batchwise(testloader, self.autoencoder, self.device)
+        embedding = encode_batchwise(testloader, self.neural_network)
 
         (
             self.n_clusters,
@@ -289,18 +280,14 @@ class SHADE(BaseEstimator, ClusterMixin):
             The predicted labels.
         """
 
-        if self.standardize:
-            Z = _standardize(X, self.standardize_axis)
-        else:
-            Z = X
         dataloader = get_dataloader(
-            Z,
+            X,
             self.batch_size,
             drop_last=False,
             shuffle=False,
         )
 
-        embedding = encode_batchwise(dataloader, self.autoencoder, self.device)
+        embedding = encode_batchwise(dataloader, self.neural_network)
 
         (
             self.n_clusters,
@@ -331,18 +318,14 @@ class SHADE(BaseEstimator, ClusterMixin):
             Embedded input data.
         """
 
-        if self.standardize:
-            Z = _standardize(X, self.standardize_axis)
-        else:
-            Z = X
         dataloader = get_dataloader(
-            Z,
+            X,
             self.batch_size,
             drop_last=False,
             shuffle=False,
         )
 
-        embedding = encode_batchwise(dataloader, self.autoencoder, self.device)
+        embedding = encode_batchwise(dataloader, self.neural_network)
         return embedding
 
 
@@ -429,6 +412,7 @@ class _SHADE_Module(_AbstractAutoencoder):
         """
 
         if self.dc_tree is not None and self.use_matrix_dc_distance:
+            print("Compute dc_distance matrix.")
             self.matrix_dc_distance = self.dc_tree.dc_distances()
 
         self.train()
@@ -456,7 +440,7 @@ class _SHADE_Module(_AbstractAutoencoder):
             #     np.array(loss_rec_sum).mean(),
             #     np.array(loss_dens_sum).mean(),
             # )
-            # emb = encode_batchwise(testloader, self.autoencoder, self.device)
+            # emb = encode_batchwise(testloader, self.autoencoder)
             # plot_with_transformation(emb, scattersize=1, show_plot=False)
             # dc_tree = DCTree(emb)
             # plot_mst(emb, dc_tree)

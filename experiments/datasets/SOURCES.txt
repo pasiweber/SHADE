@@ -1,0 +1,2 @@
+TCGA_PANCAN_HiSeq: https://archive.ics.uci.edu/dataset/401/gene+expression+cancer+rna+seq
+Synth_high & Synth_low: https://github.com/PhilJahn/DENSIRED/tree/main/datasets

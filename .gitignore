@@ -1,0 +1,13 @@
+*.pyc
+__pycache__/
+.cache/
+
+
+# Development
+/experiments/benchmark_merge/
+/experiments/motivation/pretrained_ae.mdl
+/experiments/datasets/TCGA_PANCAN_HiSeq_data.csv
+/experiments/datasets/TCGA_PANCAN_HiSeq_data.npy
+/experiments/infos/
+/_shade_development/
+/_stuff/

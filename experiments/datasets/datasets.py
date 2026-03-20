@@ -6,7 +6,7 @@ from enum import Enum
 
 
 CURRENT_DIRECTORY = os.path.dirname(os.path.realpath(__file__))
-DATASETS_FOLDER = f"{CURRENT_DIRECTORY}/datasets"
+DATASETS_FOLDER = f"{CURRENT_DIRECTORY}"
 
 
 ### Datasets ###
@@ -60,9 +60,11 @@ class Datasets(Enum):
         return standardize_dataset(self, X, l)
 
 
-def load_np_dataset(path):
-    X = np.genfromtxt("_data.csv", delimiter=',')
-    # X = np.load(path + "_data.npz", allow_pickle=True)
+def load_np_dataset(path, from_csv=False):
+    if from_csv:
+        X = np.genfromtxt(path + "_data.csv", delimiter=',')
+    else:
+        X = np.load(path + "_data.npy", allow_pickle=True)
     l = np.load(path + "_labels.npy", allow_pickle=True)
     X = X.reshape((len(X), -1))
     return X, l
@@ -80,37 +82,41 @@ def apply_label(X, l, nr):
     l = l[:, nr]
     return X, l
 
+def load_from_clustpy(dataset):
+    return dataset.data, dataset.target
+
 def load_original_dataset(dataset_id):
     match dataset_id:
         # Tabular data
         case Datasets.Synth_low: return load_syn(f"{DATASETS_FOLDER}/low_data_100.npy")
         case Datasets.Synth_high: return load_syn(f"{DATASETS_FOLDER}/high_data_100.npy")
-        case Datasets.HAR: return load_har()
-        case Datasets.letterrec: return load_letterrecognition()
-        case Datasets.htru2: return load_htru2()
-        case Datasets.Mice: return load_mice_protein()
-        case Datasets.TCGA: return load_np_dataset(f"{DATASETS_FOLDER}/TCGA_PANCAN_HiSeq")
-        case Datasets.Pendigits: return load_pendigits()
+        case Datasets.HAR: return load_from_clustpy(load_har())
+        case Datasets.letterrec: return load_from_clustpy(load_letterrecognition())
+        case Datasets.htru2: return load_from_clustpy(load_htru2())
+        case Datasets.Mice: return load_from_clustpy(load_mice_protein())
+        case Datasets.TCGA: return load_np_dataset(f"{DATASETS_FOLDER}/TCGA_PANCAN_HiSeq", from_csv=True)
+        case Datasets.Pendigits: return load_from_clustpy(load_pendigits())
         # Video data
-        case Datasets.Weizmann: return video_labels(*load_video_weizmann(normalize_channels=True))
-        case Datasets.Keck: return video_labels(*load_video_keck_gesture(normalize_channels=True))
+        case Datasets.Weizmann: return video_labels(*load_from_clustpy(load_video_weizmann()))
+        case Datasets.Keck: return video_labels(*load_from_clustpy(load_video_keck_gesture()))
         # Image data
-        case Datasets.COIL20: return load_coil20()
-        case Datasets.COIL100: return load_coil100(normalize_channels=True)
-        case Datasets.cmu_faces: return apply_label(*load_cmu_faces(), 0)
+        case Datasets.COIL20: return load_from_clustpy(load_coil20())
+        case Datasets.COIL100: return load_from_clustpy(load_coil100())
+        case Datasets.cmu_faces: return apply_label(*load_from_clustpy(load_cmu_faces()), 0)
         # MNIST data
-        case Datasets.Optdigits: return load_optdigits()
-        case Datasets.USPS: return load_usps(normalize_channels=True)
-        case Datasets.MNIST: return load_mnist(normalize_channels=True)
-        case Datasets.FMNIST: return load_fmnist(normalize_channels=True)
-        case Datasets.KMNIST: return load_kmnist(normalize_channels=True)
+        case Datasets.Optdigits: return load_from_clustpy(load_optdigits())
+        case Datasets.USPS: return load_from_clustpy(load_usps())
+        case Datasets.MNIST: return load_from_clustpy(load_mnist())
+        case Datasets.FMNIST: return load_from_clustpy(load_fmnist())
+        case Datasets.KMNIST: return load_from_clustpy(load_kmnist())
         case _:
             raise AttributeError
 
 
 def standardize(X, l, axis=None):
     std = np.std(X, axis=axis)
-    X = X[:, std != 0]  # Remove features which are identical over all samples
+    if axis != None:
+        X = X[:, std != 0]  # Remove features which are identical over all samples
     mean = np.mean(X, axis=axis)
     X = (X - mean) / std[std != 0]
     return X, l

@@ -13,7 +13,7 @@ def load_np_dataset(path):
 
 
 def video_labels(load_fn):
-    X, l = load_fn(normalize_channels=True)
+    X, l = load_fn()
     l = l[:, 1] * len(np.unique(l[:, 0])) + l[:, 0]
     return lambda *args, **kwargs: (X, l)
 
@@ -30,8 +30,9 @@ def load_syn(path):
 
 
 def apply_label(func, nr, *args):
-    X, l = func(*args)
-    l = l[:, nr]
+    dataset = func(*args)
+    X = dataset.data
+    l = dataset.target[:, nr]
     return lambda *args, **kwargs: (X, l)
 
 

@@ -1,6 +1,9 @@
 *.pyc
 __pycache__/
 .cache/
+.nfs*
+*.log
+*.err
 
 
 # Development
@@ -8,6 +11,8 @@ __pycache__/
 /experiments/motivation/pretrained_ae.mdl
 /experiments/datasets/TCGA_PANCAN_HiSeq_data.csv
 /experiments/datasets/TCGA_PANCAN_HiSeq_data.npy
+/experiments/ae_results/
+/experiments/all_results/
 /experiments/infos/
 /_shade_development/
 /_stuff/
